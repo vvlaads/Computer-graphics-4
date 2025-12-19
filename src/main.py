@@ -10,6 +10,7 @@ from util import *
 
 # Глобальные переменные и константы
 INT_MIN = -10 ** 9
+MM_TO_M = 0.001
 img = None
 
 
@@ -139,7 +140,7 @@ def get_coordinates(number):
     return x_value, y_value, z_value
 
 
-def check_power(value):
+def check_intensity(value):
     """Проверка силы излучения"""
     result_value = INT_MIN
     error_message = ""
@@ -156,15 +157,15 @@ def check_power(value):
     return result_value, error_message
 
 
-def get_power(number):
-    """Сила излучения"""
+def get_intensity(number):
+    """Интенсивность излучения"""
     if number == 1:
-        power_value = entry_power1.get()
-        power_value, power1_error["text"] = check_power(power_value)
+        intensity_value = entry_intensity1.get()
+        intensity_value, intensity1_error["text"] = check_intensity(intensity_value)
     else:
-        power_value = entry_power2.get()
-        power_value, power2_error["text"] = check_power(power_value)
-    return power_value
+        intensity_value = entry_intensity2.get()
+        intensity_value, intensity2_error["text"] = check_intensity(intensity_value)
+    return intensity_value
 
 
 def check_radius(value):
@@ -288,7 +289,7 @@ def calculate():
     """Основной метод расчета"""
     global root, img, lm
 
-    # Получение параметров
+    # === Получение параметров ===
     h, w = get_image_size()
     if h == INT_MIN or w == INT_MIN:
         print("Ошибка размера изображения")
@@ -325,9 +326,9 @@ def calculate():
         print("Ошибка радиуса сферы")
         return
 
-    power1 = get_power(1)
-    power2 = get_power(2)
-    if min(power1, power2) == INT_MIN:
+    intensity1 = get_intensity(1)
+    intensity2 = get_intensity(2)
+    if min(intensity1, intensity2) == INT_MIN:
         print("Ошибка силы излучения")
         return
 
@@ -350,14 +351,21 @@ def calculate():
     brightness = [[0.0 for _ in range(w_res)] for _ in range(h_res)]
 
     # координаты наблюдателя и центра сферы
-    observer = (0.0, 0.0, float(observer_z))
-    sphere_center = (float(center_x), float(center_y), float(center_z))
+    observer = (0.0, 0.0, float(observer_z) * MM_TO_M)
+    sphere_center = (float(center_x) * MM_TO_M, float(center_y) * MM_TO_M, float(center_z) * MM_TO_M)
 
     # источники
-    light1 = (float(source_x1), float(source_y1), float(source_z1))
-    light2 = (float(source_x2), float(source_y2), float(source_z2))
+    light1 = (float(source_x1) * MM_TO_M, float(source_y1) * MM_TO_M, float(source_z1) * MM_TO_M)
+    light2 = (float(source_x2) * MM_TO_M, float(source_y2) * MM_TO_M, float(source_z2) * MM_TO_M)
 
-    x_centers, y_centers = grid_centers(w, h, w_res, h_res)
+    # радиус в м
+    radius_m = radius * MM_TO_M
+
+    # размеры области в м
+    w_m = w * MM_TO_M
+    h_m = h * MM_TO_M
+
+    x_centers, y_centers = grid_centers(w_m, h_m, w_res, h_res)
     for i in range(h_res):
         y = y_centers[i]
         for j in range(w_res):
@@ -366,7 +374,7 @@ def calculate():
             plane_point = (float(x), float(y), 0.0)
             obs_to_plane_point = vec_norm(vec_sub(plane_point, observer))
 
-            intersection = intersection_with_sphere(observer, obs_to_plane_point, sphere_center, radius)
+            intersection = intersection_with_sphere(observer, obs_to_plane_point, sphere_center, radius_m)
             brightness[i][j] = 0
             if intersection is not None:
                 # Находим нормаль
@@ -390,14 +398,24 @@ def calculate():
                 diff2 = kd * max(0, vec_dot(n, l2))
                 spec2 = ks * max(0, vec_dot(n, h2)) ** shininess
 
-                # Освещенность источником
-                r1 = vec_len(vec_sub(light1, intersection))
-                r2 = vec_len(vec_sub(light2, intersection))
+                brightness[i][j] = intensity1 * (diff1 + spec1) + intensity2 * (diff2 + spec2)
 
-                brightness[i][j] = (power1 / r1 ** 2) * (diff1 + spec1) + (power2 / r2 ** 2) * (diff2 + spec2)
+    # Значения яркости в некоторых точках на сфере
+    min_brightness = min(min(row) for row in brightness)
+    max_brightness = max(max(row) for row in brightness)
+    point_brightness = get_brightness_in_points(observer,
+                                                light1, light2,
+                                                sphere_center, radius_m,
+                                                kd, ks, shininess, intensity1, intensity2)
+
+    print("=" * 100)
+    print(f"Минимальное значение яркости: {min_brightness}")
+    print(f"Максимальное значение яркости: {max_brightness}")
+    for (point, brightness_val) in point_brightness:
+        print(f"Точка ({point[0]: .3f}, {point[1]: .3f}, {point[2]: .3f}) (м): яркость = {brightness_val: .6f}")
+    print("=" * 100)
 
     # Нормализация яркости
-    max_brightness = max(max(row) for row in brightness)
     if max_brightness > 0:
         for i in range(h_res):
             for j in range(w_res):
@@ -425,6 +443,77 @@ def calculate():
     canvas.configure(scrollregion=canvas.bbox("all"))
     canvas.grid(row=0, column=0, sticky="nsew")
     scrollbar.grid(row=0, column=1, sticky="ns")
+
+
+def get_brightness_in_points(observer, light1, light2, sphere_center, radius_m, kd, ks, shininess, intensity1,
+                             intensity2):
+    """Расчет яркости в 3 точках сферы"""
+
+    # Выбираем 3 характерные точки на сфере:
+    # 1) Точка, направленная к первому источнику
+    # 2) Точка, направленная ко второму источнику
+    # 3) Произвольная точка
+
+    # Список для хранения яркости в 3 точках
+    point_brightness = []
+
+    # Вычисляем векторы от центра сферы к источникам
+    light1_dir = vec_norm(vec_sub(light1, sphere_center))
+    light2_dir = vec_norm(vec_sub(light2, sphere_center))
+
+    # Точки на поверхности сферы:
+    # Точка 1: в направлении первого источника
+    point1 = (
+        sphere_center[0] + light1_dir[0] * radius_m,
+        sphere_center[1] + light1_dir[1] * radius_m,
+        sphere_center[2] + light1_dir[2] * radius_m
+    )
+
+    # Точка 2: в направлении второго источника
+    point2 = (
+        sphere_center[0] + light2_dir[0] * radius_m,
+        sphere_center[1] + light2_dir[1] * radius_m,
+        sphere_center[2] + light2_dir[2] * radius_m
+    )
+
+    # Точка 3: произвольная точка
+    arbitrary_dir = (0.0, 1.0, 0.0)  # например, по оси Y
+    point3 = (
+        sphere_center[0] + arbitrary_dir[0] * radius_m,
+        sphere_center[1] + arbitrary_dir[1] * radius_m,
+        sphere_center[2] + arbitrary_dir[2] * radius_m
+    )
+
+    # Вычисляем яркость в этих точках
+    selected_points = [point1, point2, point3]
+
+    for idx, point in enumerate(selected_points, 1):
+        # Нормаль в этой точке (от центра к поверхности)
+        n = vec_norm(vec_sub(point, sphere_center))
+
+        # Векторы к источникам света
+        l1 = vec_norm(vec_sub(light1, point))
+        l2 = vec_norm(vec_sub(light2, point))
+
+        # Вектор к наблюдателю
+        v = vec_norm(vec_sub(observer, point))
+
+        # Half-vectors
+        h1 = vec_norm(vec_add(l1, v))
+        h2 = vec_norm(vec_add(l2, v))
+
+        # Диффузное и зеркальное отражение
+        diff1 = kd * max(0, vec_dot(n, l1))
+        spec1 = ks * max(0, vec_dot(n, h1)) ** shininess
+
+        diff2 = kd * max(0, vec_dot(n, l2))
+        spec2 = ks * max(0, vec_dot(n, h2)) ** shininess
+
+        # Яркость в этой точке
+        point_brightness_val = intensity1 * (diff1 + spec1) + intensity2 * (diff2 + spec2)
+        point_brightness.append((point, point_brightness_val))
+
+    return point_brightness
 
 
 def save():
@@ -634,27 +723,27 @@ radius_error.grid(row=lm.get_row(), column=5, padx=10, pady=5)
 radius_sep = ttk.Separator(root, orient=tk.HORIZONTAL)
 radius_sep.grid(row=lm.next_row(), column=3, columnspan=2, sticky="ew", pady=20)
 
-# === Сила излучения ===
-label_power_head = tk.Label(root, text="Сила излучения (Вт/ср.)")
-label_power_head.grid(row=lm.next_row(), column=3, padx=10, pady=5, columnspan=2)
+# === Интенсивность излучения ===
+label_intensity_head = tk.Label(root, text="Интенсивность излучения (Вт/ср.)")
+label_intensity_head.grid(row=lm.next_row(), column=3, padx=10, pady=5, columnspan=2)
 
-label_power1 = tk.Label(root, text="I1 (от 0.01 до 10000):")
-label_power1.grid(row=lm.next_row(), column=3, padx=10, pady=5)
-entry_power1 = tk.Entry(root)
-entry_power1.grid(row=lm.get_row(), column=4, padx=10, pady=5)
-power1_error = tk.Label(root, text="")
-power1_error.grid(row=lm.get_row(), column=5, padx=10, pady=5)
+label_intensity1 = tk.Label(root, text="I1 (от 0.01 до 10000):")
+label_intensity1.grid(row=lm.next_row(), column=3, padx=10, pady=5)
+entry_intensity1 = tk.Entry(root)
+entry_intensity1.grid(row=lm.get_row(), column=4, padx=10, pady=5)
+intensity1_error = tk.Label(root, text="")
+intensity1_error.grid(row=lm.get_row(), column=5, padx=10, pady=5)
 
-label_power2 = tk.Label(root, text="I2 (от 0.01 до 10000):")
-label_power2.grid(row=lm.next_row(), column=3, padx=10, pady=5)
-entry_power2 = tk.Entry(root)
-entry_power2.grid(row=lm.get_row(), column=4, padx=10, pady=5)
-power2_error = tk.Label(root, text="")
-power2_error.grid(row=lm.get_row(), column=5, padx=10, pady=5)
+label_intensity2 = tk.Label(root, text="I2 (от 0.01 до 10000):")
+label_intensity2.grid(row=lm.next_row(), column=3, padx=10, pady=5)
+entry_intensity2 = tk.Entry(root)
+entry_intensity2.grid(row=lm.get_row(), column=4, padx=10, pady=5)
+intensity2_error = tk.Label(root, text="")
+intensity2_error.grid(row=lm.get_row(), column=5, padx=10, pady=5)
 
 # Разделитель перед следующим блоком
-power_sep = ttk.Separator(root, orient=tk.HORIZONTAL)
-power_sep.grid(row=lm.next_row(), column=3, columnspan=2, sticky="ew", pady=20)
+intensity_sep = ttk.Separator(root, orient=tk.HORIZONTAL)
+intensity_sep.grid(row=lm.next_row(), column=3, columnspan=2, sticky="ew", pady=20)
 
 # === Диффузное отражение ===
 label_kd_head = tk.Label(root, text="Диффузное отражение")
