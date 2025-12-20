@@ -337,16 +337,36 @@ def check_sphere_visibility(observer, sphere_center, radius_m, w_m, h_m):
     return True, ""
 
 
-def check_lights(light1, light2, sphere_center, radius_m):
+def check_lights(observer, light1, light2, sphere_center, radius_m):
     """
-    Проверяет, что источники света не находятся внутри или на поверхности сферы.
+    Проверяет, что источники света не находятся внутри сферы или за ней.
     """
-    # Расстояние от центра сферы до первого источника
+    # Вектор от наблюдателя к источнику света 1
+    dir_to_light1 = vec_norm(vec_sub(light1, observer))
+
+    # Проверяем пересечение этого луча со сферой
+    intersection1 = intersection_with_sphere(observer, dir_to_light1, sphere_center, radius_m)
+    if intersection1 is not None:
+        # Проверяем, находится ли источник за сферой
+        dist_to_intersection = vec_len(vec_sub(intersection1, observer))
+        dist_to_light = vec_len(vec_sub(light1, observer))
+        if dist_to_intersection < dist_to_light - 1e-6:
+            return False, "Источник света 1 находится в тени сферы"
+
+    # Аналогично для второго источника
+    dir_to_light2 = vec_norm(vec_sub(light2, observer))
+    intersection2 = intersection_with_sphere(observer, dir_to_light2, sphere_center, radius_m)
+    if intersection2 is not None:
+        dist_to_intersection = vec_len(vec_sub(intersection2, observer))
+        dist_to_light = vec_len(vec_sub(light2, observer))
+        if dist_to_intersection < dist_to_light - 1e-6:
+            return False, "Источник света 2 находится в тени сферы"
+
+    # Проверяем, что источники не внутри сферы
     dist1 = vec_len(vec_sub(light1, sphere_center))
     if dist1 <= radius_m:
         return False, "Источник света 1 находится внутри сферы"
 
-    # Расстояние от центра сферы до второго источника
     dist2 = vec_len(vec_sub(light2, sphere_center))
     if dist2 <= radius_m:
         return False, "Источник света 2 находится внутри сферы"
@@ -442,7 +462,7 @@ def calculate():
         print("Ошибка! Сфера не помещается целиком в область видимости")
         return
 
-    are_lights_ok, lights_error["text"] = check_lights(light1, light2, sphere_center, radius_m)
+    are_lights_ok, lights_error["text"] = check_lights(observer, light1, light2, sphere_center, radius_m)
     if not are_lights_ok:
         print("Источник света находится внутри сферы")
         return
