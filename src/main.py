@@ -285,6 +285,75 @@ def get_shininess():
     return value
 
 
+def check_sphere_visibility(observer, sphere_center, radius_m, w_m, h_m):
+    """Проверяет, что сфера целиком помещается в область видимости наблюдателя"""
+
+    # Проверяем, что наблюдатель не внутри сферы
+    observer_to_center = vec_sub(observer, sphere_center)
+    distance_to_center = vec_len(observer_to_center)
+
+    if distance_to_center <= radius_m:
+        return False, "Наблюдатель находится внутри или на поверхности сферы"
+
+    # Проверяем, что сфера полностью перед наблюдателем
+    if sphere_center[2] + radius_m >= observer[2]:
+        return False, "Сфера находится выше наблюдателя"
+
+    obs_x, obs_y, obs_z = observer
+
+    # Проектируем сферу на плоскость z=0 (плоскость изображения)
+    # Используем подобие треугольников
+    t = -obs_z / (sphere_center[2] - obs_z)
+
+    # Проекция центра сферы
+    proj_center_x = obs_x + t * (sphere_center[0] - obs_x)
+    proj_center_y = obs_y + t * (sphere_center[1] - obs_y)
+
+    # Радиус проекции (подобие треугольников)
+    proj_radius = radius_m * abs(t) / distance_to_center
+
+    # Границы области видимости на плоскости z=0
+    left = -w_m / 2
+    right = w_m / 2
+    bottom = -h_m / 2
+    top = h_m / 2
+
+    # Проверяем, что проекция сферы полностью внутри прямоугольника
+    if (proj_center_x - proj_radius < left or
+            proj_center_x + proj_radius > right or
+            proj_center_y - proj_radius < bottom or
+            proj_center_y + proj_radius > top):
+        return False, "Проекция сферы выходит за границы видимой области"
+
+    # Также проверяем, что сфера не слишком близко к границам
+    margin = min(w_m, h_m) * 0.05  # 5% отступ
+
+    if (proj_center_x - proj_radius < left + margin or
+            proj_center_x + proj_radius > right - margin or
+            proj_center_y - proj_radius < bottom + margin or
+            proj_center_y + proj_radius > top - margin):
+        return False, "Сфера слишком близко к границе видимой области"
+
+    return True, ""
+
+
+def check_lights(light1, light2, sphere_center, radius_m):
+    """
+    Проверяет, что источники света не находятся внутри или на поверхности сферы.
+    """
+    # Расстояние от центра сферы до первого источника
+    dist1 = vec_len(vec_sub(light1, sphere_center))
+    if dist1 <= radius_m:
+        return False, "Источник света 1 находится внутри сферы"
+
+    # Расстояние от центра сферы до второго источника
+    dist2 = vec_len(vec_sub(light2, sphere_center))
+    if dist2 <= radius_m:
+        return False, "Источник света 2 находится внутри сферы"
+
+    return True, ""
+
+
 def calculate():
     """Основной метод расчета"""
     global root, img, lm
@@ -347,9 +416,7 @@ def calculate():
         print("Ошибка блеска")
         return
 
-    # === Подсчёт яркости ===
-    brightness = [[0.0 for _ in range(w_res)] for _ in range(h_res)]
-
+    # === Подготовка данных ===
     # координаты наблюдателя и центра сферы
     observer = (0.0, 0.0, float(observer_z) * MM_TO_M)
     sphere_center = (float(center_x) * MM_TO_M, float(center_y) * MM_TO_M, float(center_z) * MM_TO_M)
@@ -365,6 +432,23 @@ def calculate():
     w_m = w * MM_TO_M
     h_m = h * MM_TO_M
 
+    # Очищаем сообщения об ошибке
+    sphere_visible_error["text"] = ""
+    lights_error["text"] = ""
+
+    is_sphere_visible, sphere_visible_error["text"] = check_sphere_visibility(observer, sphere_center, radius_m, w_m,
+                                                                              h_m)
+    if not is_sphere_visible:
+        print("Ошибка! Сфера не помещается целиком в область видимости")
+        return
+
+    are_lights_ok, lights_error["text"] = check_lights(light1, light2, sphere_center, radius_m)
+    if not are_lights_ok:
+        print("Источник света находится внутри сферы")
+        return
+
+    # === Подсчёт яркости ===
+    brightness = [[0.0 for _ in range(w_res)] for _ in range(h_res)]
     x_centers, y_centers = grid_centers(w_m, h_m, w_res, h_res)
     for i in range(h_res):
         y = y_centers[i]
@@ -797,6 +881,12 @@ button.grid(row=lm.next_row(), column=3, padx=10, pady=5)
 # Кнопка для сохранения
 button = tk.Button(root, text="Сохранить", command=lambda: save(), width=15, height=2)
 button.grid(row=lm.get_row(), column=4, padx=10, pady=5)
+
+sphere_visible_error = tk.Label(root, text="")
+sphere_visible_error.grid(row=lm.next_row(), column=3, padx=10, pady=5, columnspan=2)
+
+lights_error = tk.Label(root, text="")
+lights_error.grid(row=lm.next_row(), column=3, padx=10, pady=5, columnspan=2)
 
 # Основной цикл
 root.mainloop()
